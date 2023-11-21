@@ -44,14 +44,10 @@
 typedef bits16 BufFlags;
 
 /*
- * The maximum allowed value of usage_count represents a tradeoff between
- * accuracy and speed of the clock-sweep buffer management algorithm.  A
- * large value (comparable to NBuffers) would approximate LRU semantics.
- * But it can take as many as BM_MAX_USAGE_COUNT+1 complete cycles of
- * clock sweeps to find a free buffer, so in practice we don't want the
- * value to be very large.
+ * Since the usage_count field of BufferDesc was removed when switching from the
+ * clock buffer replacement strategy, this macro is no longer used.
  */
-#define BM_MAX_USAGE_COUNT	5
+/*#define BM_MAX_USAGE_COUNT	5*/
 
 /*
  * Buffer tag identifies which disk block the buffer contains.
@@ -110,7 +106,7 @@ typedef struct buftag
  *	BufferDesc -- shared descriptor/state data for a single shared buffer.
  *
  * Note: buf_hdr_lock must be held to examine or change the tag, flags,
- * usage_count, refcount, or wait_backend_pid fields.  buf_id field never
+ * refcount, or wait_backend_pid fields.  buf_id field never
  * changes after initialization, so does not need locking.	freeNext is
  * protected by the BufFreelistLock not buf_hdr_lock.  The LWLocks can take
  * care of themselves.	The buf_hdr_lock is *not* used to control access to
@@ -135,9 +131,11 @@ typedef struct sbufdesc
 {
 	BufferTag	tag;			/* ID of page contained in buffer */
 	BufFlags	flags;			/* see bit definitions above */
-	uint16		usage_count;	/* usage counter for clock sweep code */
 	unsigned	refcount;		/* # of backends holding pins on buffer */
 	int			wait_backend_pid;		/* backend PID of pin-count waiter */
+
+	int 		lruNext;		/* link to buf used less recently */
+	int 		lruPrev;		/* link to buf used more recently */
 
 	slock_t		buf_hdr_lock;	/* protects the above fields */
 
@@ -149,6 +147,16 @@ typedef struct sbufdesc
 } BufferDesc;
 
 #define BufferDescriptorGetBuffer(bdesc) ((bdesc)->buf_id + 1)
+
+/*
+ * The lruNext and lruPrev fields each hold either an index to another buffer
+ * header or one of these special values. LRU_END_OF_LIST is held in both the
+ * lruNext of the last buffer in the list and the lruPrev of the first buffer
+ * in the list. Both lruNext and lruPrev are LRU_NOT_IN_LIST if the buffer is
+ * not in the LRU linked list.
+ */
+#define LRU_END_OF_LIST			(-1)
+#define LRU_NOT_IN_LIST			(-2)
 
 /*
  * The freeNext field is either the index of the next freelist entry,
@@ -187,6 +195,7 @@ extern volatile BufferDesc *StrategyGetBuffer(BufferAccessStrategy strategy,
 extern void StrategyFreeBuffer(volatile BufferDesc *buf);
 extern bool StrategyRejectBuffer(BufferAccessStrategy strategy,
 					 volatile BufferDesc *buf);
+extern void StrategyUsedBuffer(volatile BufferDesc *buf);
 
 extern int	StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc);
 extern void StrategyNotifyBgWriter(Latch *bgwriterLatch);
@@ -212,5 +221,6 @@ extern void DropRelFileNodeLocalBuffers(RelFileNode rnode, ForkNumber forkNum,
 							BlockNumber firstDelBlock);
 extern void DropRelFileNodeAllLocalBuffers(RelFileNode rnode);
 extern void AtEOXact_LocalBuffers(bool isCommit);
+extern void LocalUsedBuffer(BufferDesc *buf);
 
 #endif   /* BUFMGR_INTERNALS_H */
